@@ -199,3 +199,12 @@ fn completion_rendering_uses_the_captured_display_date() {
     insta::assert_snapshot!(cell.display_lines(/*width*/ 80)[0].to_string(), @"  2:32 PM");
     assert_eq!(cell.raw_lines(), vec![Line::from("2:32 PM")]);
 }
+
+#[test]
+fn lantern_theme_turns_worked_for_into_construct_complete() {
+    crate::lantern::force_enabled_for_test(true);
+    let lines = FinalMessageSeparator::new(Some(12), None).display_lines(80);
+    let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(text.contains("✦ Construct complete in 12s"), "{text:?}");
+    assert_eq!(lines.len(), 1);
+}

@@ -56,6 +56,40 @@ impl FinalMessageSeparator {
         self
     }
 
+    /// "✦ Construct complete in 12s • 2:14 PM": the turn's end, in the theme.
+    fn lantern_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let rgb = crate::terminal_palette::rgb_color;
+        let Some(label) = self.label(self.display_date) else {
+            return Vec::new();
+        };
+        let label = match label.strip_prefix("Worked for ") {
+            Some(rest) => format!("Construct complete in {rest}"),
+            None => label,
+        };
+        let (headline, rest) = match label.split_once(" • ") {
+            Some((head, rest)) => (head.to_string(), Some(rest.to_string())),
+            None => (label, None),
+        };
+        let mut spans = vec![
+            "  ".into(),
+            Span::styled("✦ ", ratatui::style::Style::default().fg(rgb(crate::lantern::RING_GOLD))),
+            Span::styled(
+                headline,
+                ratatui::style::Style::default().fg(rgb(crate::lantern::RING_GREEN)).bold(),
+            ),
+        ];
+        if let Some(rest) = rest {
+            spans.push(Span::styled(
+                format!(" • {rest}"),
+                ratatui::style::Style::default().fg(rgb(crate::lantern::DUST)),
+            ));
+        }
+        vec![crate::line_truncation::truncate_line_with_ellipsis_if_overflow(
+            Line::from(spans),
+            usize::from(width),
+        )]
+    }
+
     fn label(&self, today: NaiveDate) -> Option<String> {
         let mut label_parts = Vec::new();
         if let Some(elapsed_seconds) = self.elapsed_seconds {
@@ -97,6 +131,9 @@ impl HistoryCell for FinalMessageSeparator {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if width == 0 {
             return Vec::new();
+        }
+        if crate::lantern::enabled() {
+            return self.lantern_lines(width);
         }
         self.label(self.display_date)
             .map(|label| {

@@ -17,9 +17,16 @@ A fan-made, Green Lantern flavored fork of the [OpenAI Codex CLI](https://github
 
 The status line only fills in the limit and context bars once Codex has that data (after a turn). If you set `tui.status_line` in `config.toml`, your items are used instead of the lantern defaults, but they are still drawn in green.
 
-### Construct badge
+### Animations
 
-On truecolor terminals the working row starts with an animated construct: eight cells assemble one by one through `░▒▓█` with a white-green flash as each piece locks in, a sparkle sweeps the finished construct, then the pieces dissolve right to left and it starts over (3.6s cycle). It lives in [`lantern_construct.rs`](codex-rs/tui/src/lantern_construct.rs) as a pure function of elapsed time. With animations disabled or without truecolor you get the stock spinner.
+On truecolor terminals (and when animations are enabled) the working row comes alive:
+
+- **Charging ring.** A small ring sits left of the text with a gold spark orbiting its band, a fading green trail, and a pulse of light in the hollow (when your terminal reports its background color).
+- **Constructing text.** Each new working phrase assembles letter by letter, forming through `░▒▓` and flashing gold as it locks in, then settles into the green shimmer. Phrases rotate every 7 seconds.
+- **Construct strip.** Under the phrase and the oath line, eight cells build up one by one, a sparkle sweeps the finished construct, and the pieces dissolve and start again (3.6s cycle).
+- **Finish flourish.** When a turn ends, the "Worked for 12s" line becomes `✦ Construct complete in 12s`.
+
+On narrow terminals (under 44 columns) the ring is dropped and the strip sits inline; without truecolor or with animations off you get the stock spinner. The code is in [`lantern_construct.rs`](codex-rs/tui/src/lantern_construct.rs) (pure functions of elapsed time, so they are easy to test) and the layout is in `status_indicator_widget.rs`.
 
 ### Everything green
 

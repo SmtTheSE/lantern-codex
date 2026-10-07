@@ -173,21 +173,22 @@ fn sample(x: usize, y: usize, bg: Option<Rgb>) -> Option<Rgb> {
     }
 }
 
+/// Combine two vertically stacked pixels into one terminal cell.
+pub(crate) fn compose(top: Option<Rgb>, bottom: Option<Rgb>) -> Cell {
+    match (top, bottom) {
+        (None, None) => Cell { ch: ' ', fg: None, bg: None },
+        (Some(t), None) => Cell { ch: '▀', fg: Some(t), bg: None },
+        (None, Some(b)) => Cell { ch: '▄', fg: Some(b), bg: None },
+        (Some(t), Some(b)) => Cell { ch: '▀', fg: Some(t), bg: Some(b) },
+    }
+}
+
 /// Rasterize the ring into `ROWS` rows of `WIDTH` cells.
 pub(crate) fn render(bg: Option<Rgb>) -> Vec<Vec<Cell>> {
     (0..ROWS)
         .map(|row| {
             (0..WIDTH)
-                .map(|col| {
-                    let top = sample(col, 2 * row, bg);
-                    let bottom = sample(col, 2 * row + 1, bg);
-                    match (top, bottom) {
-                        (None, None) => Cell { ch: ' ', fg: None, bg: None },
-                        (Some(t), None) => Cell { ch: '▀', fg: Some(t), bg: None },
-                        (None, Some(b)) => Cell { ch: '▄', fg: Some(b), bg: None },
-                        (Some(t), Some(b)) => Cell { ch: '▀', fg: Some(t), bg: Some(b) },
-                    }
-                })
+                .map(|col| compose(sample(col, 2 * row, bg), sample(col, 2 * row + 1, bg)))
                 .collect()
         })
         .collect()

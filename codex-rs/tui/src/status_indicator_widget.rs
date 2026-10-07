@@ -43,6 +43,42 @@ mod summary_shimmer;
 use summary_shimmer::summary_shimmer;
 
 pub(crate) const STATUS_DETAILS_DEFAULT_MAX_LINES: usize = 3;
+
+/// The charging ring needs this many columns to leave room for the text.
+const RING_MIN_WIDTH: u16 = 44;
+/// Columns the ring takes: its cells plus a gap.
+const RING_INDENT: u16 = (crate::lantern_construct::RING_COLS + 2) as u16;
+
+/// The eight-cell construct strip as styled spans.
+fn construct_strip(running: Duration) -> Vec<Span<'static>> {
+    crate::lantern_construct::badge(running)
+        .into_iter()
+        .map(|cell| {
+            Span::styled(
+                cell.glyph.to_string(),
+                ratatui::style::Style::default().fg(crate::terminal_palette::rgb_color(cell.color)),
+            )
+        })
+        .collect()
+}
+
+/// One row of the charging ring as styled spans.
+fn ring_row_spans(cells: &[crate::lantern_logo::Cell]) -> Vec<Span<'static>> {
+    let rgb = crate::terminal_palette::rgb_color;
+    cells
+        .iter()
+        .map(|cell| {
+            let mut style = ratatui::style::Style::default();
+            if let Some(fg) = cell.fg {
+                style = style.fg(rgb(fg));
+            }
+            if let Some(bg) = cell.bg {
+                style = style.bg(rgb(bg));
+            }
+            Span::styled(cell.ch.to_string(), style)
+        })
+        .collect()
+}
 const DETAILS_PREFIX: &str = "  └ ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,16 +271,20 @@ impl StatusIndicator<'_> {
         let shimmer =
             MotionMode::from_animations_enabled(row.animations_enabled && row.effects.shimmer);
 
+        let lantern = crate::lantern::enabled();
+        let lantern_fx = crate::lantern::show_construct() && progress == MotionMode::Animated;
+        // With room to spare, a small charging ring sits left of the text and
+        // the construct strip drops to its own row beneath the phrase.
+        let ring_mode = lantern_fx && width >= RING_MIN_WIDTH;
+        let width_total = width;
+        let width = if ring_mode { width.saturating_sub(RING_INDENT) } else { width };
+        let running = now.saturating_duration_since(self.timer.last_resume_at);
+
         let mut spans = Vec::with_capacity(5);
-        if crate::lantern::show_construct() && progress == MotionMode::Animated {
-            let running = now.saturating_duration_since(self.timer.last_resume_at);
-            for cell in crate::lantern_construct::badge(running) {
-                spans.push(Span::styled(
-                    cell.glyph.to_string(),
-                    ratatui::style::Style::default()
-                        .fg(crate::terminal_palette::rgb_color(cell.color)),
-                ));
-            }
+        if ring_mode {
+            // Ring and strip are added after the text lines are known.
+        } else if lantern_fx {
+            spans.extend(construct_strip(running));
             spans.push(" ".into());
         } else if let Some(indicator) = activity_indicator(
             Some(self.timer.last_resume_at),
@@ -254,7 +294,6 @@ impl StatusIndicator<'_> {
             spans.push(indicator);
             spans.push(" ".into());
         }
-        let lantern = crate::lantern::enabled();
         let elapsed_secs = elapsed_duration.as_secs();
         let shown_header = if lantern {
             format!(
@@ -264,11 +303,36 @@ impl StatusIndicator<'_> {
         } else {
             row.header.clone()
         };
-        spans.extend(summary_shimmer(
-            &shown_header,
-            now.saturating_duration_since(row.header_started_at),
-            shimmer,
-        ));
+        let phrase_age = crate::lantern::phrase_age_ms(elapsed_duration.as_millis() as u64);
+        if lantern_fx
+            && phrase_age < crate::lantern_construct::reveal_duration_ms(shown_header.chars().count())
+        {
+            // A new phrase materializes letter by letter before the shimmer takes over.
+            let green = crate::lantern::RING_GREEN;
+            for (ch, color) in crate::lantern_construct::reveal(&shown_header, phrase_age, green) {
+                spans.push(Span::styled(
+                    ch.to_string(),
+                    ratatui::style::Style::default().fg(crate::terminal_palette::rgb_color(color)),
+                ));
+            }
+        } else if lantern_fx
+            && (crate::terminal_palette::default_fg().is_none()
+                || crate::terminal_palette::default_bg().is_none())
+        {
+            // The shimmer needs the terminal's colors; without them keep the
+            // phrase ring green rather than falling back to dim gray.
+            spans.push(Span::styled(
+                shown_header.clone(),
+                ratatui::style::Style::default()
+                    .fg(crate::terminal_palette::rgb_color(crate::lantern::RING_GREEN)),
+            ));
+        } else {
+            spans.extend(summary_shimmer(
+                &shown_header,
+                now.saturating_duration_since(row.header_started_at),
+                shimmer,
+            ));
+        }
         if !spans.is_empty() {
             spans.push(" ".into());
         }
@@ -331,6 +395,32 @@ impl StatusIndicator<'_> {
             ));
         }
         lines.extend(row.wrapped_details_lines(width));
+
+        if ring_mode {
+            let strip = Line::from(construct_strip(running));
+            let strip_at = lines.len().min(2);
+            lines.insert(strip_at, strip);
+            while lines.len() < crate::lantern_construct::RING_ROWS {
+                lines.push(Line::default());
+            }
+            let ring =
+                crate::lantern_construct::mini_ring(running, crate::terminal_palette::default_bg());
+            for (i, line) in lines.iter_mut().enumerate() {
+                let mut prefixed = match ring.get(i) {
+                    Some(cells) => {
+                        let mut spans = ring_row_spans(cells);
+                        spans.push("  ".into());
+                        spans
+                    }
+                    None => vec![Span::from(" ".repeat(usize::from(RING_INDENT)))],
+                };
+                prefixed.append(&mut line.spans);
+                *line = truncate_line_with_ellipsis_if_overflow(
+                    Line::from(prefixed),
+                    usize::from(width_total),
+                );
+            }
+        }
         lines
     }
 }
@@ -620,6 +710,48 @@ mod tests {
                 .is_some_and(|span| span.content.as_ref().contains('…')),
             "expected one-line details to be ellipsized, got {last:?}"
         );
+    }
+
+    fn lantern_row(width: u16) -> Vec<String> {
+        crate::lantern::force_enabled_for_test(true);
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let timer = StatusTimer::default();
+        let w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ true,
+            Default::default(),
+        );
+        StatusIndicator { row: &w, timer: &timer }
+            .lines(width)
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect()
+    }
+
+    #[test]
+    fn lantern_row_puts_a_charging_ring_left_of_the_text() {
+        let lines = lantern_row(80);
+        assert!(lines.len() >= crate::lantern_construct::RING_ROWS, "{lines:#?}");
+        assert!(lines[0].contains("(0s"), "timer stays on the first row: {lines:#?}");
+        // The ring occupies the first columns of the first three rows.
+        for line in &lines[..crate::lantern_construct::RING_ROWS] {
+            let ring: String = line.chars().take(crate::lantern_construct::RING_COLS).collect();
+            assert!(ring.chars().all(|c| " ▀▄".contains(c)), "ring cells only: {ring:?}");
+        }
+        // The construct strip sits on the third row, beneath the phrase and oath.
+        let strip: String =
+            lines[2].chars().skip(crate::lantern_construct::RING_COLS + 2).collect();
+        assert!(strip.chars().all(|c| "·░▒▓█✦ ".contains(c)), "strip glyphs only: {strip:?}");
+        assert!(lines.iter().all(|l| l.chars().count() <= 80), "fits the width: {lines:#?}");
+    }
+
+    #[test]
+    fn lantern_row_drops_the_ring_on_narrow_terminals() {
+        let lines = lantern_row(30);
+        assert_eq!(lines.len(), 2, "phrase row plus oath, no ring rows: {lines:#?}");
+        assert!(lines[0].contains("(0s"));
     }
 }
 

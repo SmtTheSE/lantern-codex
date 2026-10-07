@@ -180,17 +180,32 @@ const ROTATE_SECONDS: u64 = 7;
 
 static NEXT_BASE: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(test)]
+thread_local! {
+    static TEST_FORCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Turn the theme on for the current test thread (it is off in tests by default).
+#[cfg(test)]
+pub(crate) fn force_enabled_for_test(on: bool) {
+    TEST_FORCE.with(|force| force.set(on));
+}
+
 pub(crate) fn enabled() -> bool {
-    if cfg!(test) {
-        return false;
+    #[cfg(test)]
+    {
+        TEST_FORCE.with(std::cell::Cell::get)
     }
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        !matches!(
-            std::env::var("CODEX_LANTERN").as_deref(),
-            Ok("0" | "false" | "off")
-        )
-    })
+    #[cfg(not(test))]
+    {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            !matches!(
+                std::env::var("CODEX_LANTERN").as_deref(),
+                Ok("0" | "false" | "off")
+            )
+        })
+    }
 }
 
 /// Whether the dusty heartland look is active (the default theme).
@@ -252,6 +267,12 @@ pub(crate) fn phrase(base: usize, elapsed_secs: u64, header: &str) -> &'static s
     pool[(base + (elapsed_secs / ROTATE_SECONDS) as usize) % pool.len()]
 }
 
+/// How long the current working phrase has been on screen, so the row can
+/// animate it in when it changes.
+pub(crate) fn phrase_age_ms(elapsed_ms: u64) -> u64 {
+    elapsed_ms % (ROTATE_SECONDS * 1000)
+}
+
 /// The oath line to show under the working row `elapsed_secs` into a turn.
 pub(crate) fn oath_line(base: usize, elapsed_secs: u64) -> &'static str {
     OATH[(base + (elapsed_secs / ROTATE_SECONDS) as usize) % OATH.len()]
@@ -275,7 +296,8 @@ pub(crate) fn title() -> &'static str {
 const RING_MIN_TERMINAL_WIDTH: usize = 60;
 
 fn truecolor() -> bool {
-    matches!(
+    cfg!(test)
+        || matches!(
         crate::terminal_palette::effective_stdout_color_level(),
         crate::terminal_palette::StdoutColorLevel::TrueColor
     )

@@ -1,7 +1,13 @@
 #!/bin/sh
 # Launch Lantern Codex (the themed Codex CLI fork) from any directory.
-# Prefers the release build and falls back to the debug build.
+# Uses whichever build is newer: the release build is faster to start, but the
+# debug build is quick to rebuild after a code change.
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-BIN="$ROOT/codex-rs/target/release/codex"
-[ -x "$BIN" ] || BIN="$ROOT/codex-rs/target/debug/codex"
+REL="$ROOT/codex-rs/target/release/codex"
+DBG="$ROOT/codex-rs/target/debug/codex"
+if [ -x "$REL" ] && { [ ! -x "$DBG" ] || [ "$REL" -nt "$DBG" ]; }; then
+  BIN="$REL"
+else
+  BIN="$DBG"
+fi
 exec "$BIN" --no-daemon "$@"

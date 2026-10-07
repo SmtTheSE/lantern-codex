@@ -116,6 +116,85 @@ pub(crate) fn badge(elapsed: Duration) -> [Cell; CELLS] {
     })
 }
 
+/// Delay between one letter starting to form and the next.
+const REVEAL_STEP_MS: u64 = 35;
+/// Time each `░▒▓` stage of a forming letter lasts.
+const REVEAL_STAGE_MS: u64 = 45;
+
+/// How long `reveal` takes to finish a phrase of `chars` characters.
+pub(crate) fn reveal_duration_ms(chars: usize) -> u64 {
+    chars as u64 * REVEAL_STEP_MS + 3 * REVEAL_STAGE_MS + FLASH_MS
+}
+
+/// A phrase materializing letter by letter: each letter forms through `░▒▓`,
+/// then locks in with a flash of the ring's gold. `ms` is time since the phrase
+/// appeared; once `reveal_duration_ms` has passed it is plain `text` in `color`.
+pub(crate) fn reveal(text: &str, ms: u64, color: Rgb) -> Vec<(char, Rgb)> {
+    text.chars()
+        .enumerate()
+        .map(|(i, ch)| {
+            let start = i as u64 * REVEAL_STEP_MS;
+            if ch == ' ' || ms < start {
+                return (' ', color);
+            }
+            let age = ms - start;
+            match age / REVEAL_STAGE_MS {
+                0 => ('░', lerp(FORMING, color, 0.3)),
+                1 => ('▒', lerp(FORMING, color, 0.6)),
+                2 => ('▓', lerp(FORMING, color, 0.85)),
+                _ => {
+                    let since = age - 3 * REVEAL_STAGE_MS;
+                    let flash = 1.0 - (since as f32 / FLASH_MS as f32).clamp(0.0, 1.0);
+                    (ch, lerp(color, glint(), flash * 0.9))
+                }
+            }
+        })
+        .collect()
+}
+
+pub(crate) const RING_COLS: usize = 6;
+pub(crate) const RING_ROWS: usize = 3;
+/// Time the orbiting spark takes to advance one pixel.
+const ORBIT_STEP_MS: u64 = 70;
+/// Pixels of the little ring's band, clockwise from the top left.
+const ORBIT: [(usize, usize); 16] = [
+    (1, 0), (2, 0), (3, 0), (4, 0),
+    (5, 1), (5, 2), (5, 3), (5, 4),
+    (4, 5), (3, 5), (2, 5), (1, 5),
+    (0, 4), (0, 3), (0, 2), (0, 1),
+];
+
+/// A small ring that charges while the model works: a spark orbits the band
+/// leaving a fading trail, and the hollow pulses with light (when the terminal
+/// background is known). `RING_ROWS` rows of `RING_COLS` cells.
+pub(crate) fn mini_ring(elapsed: Duration, bg: Option<Rgb>) -> Vec<Vec<crate::lantern_logo::Cell>> {
+    let ms = elapsed.as_millis() as u64;
+    let head = (ms / ORBIT_STEP_MS) as usize % ORBIT.len();
+    let pulse = 0.5 + 0.5 * (ms as f32 / 450.0).sin();
+    let pixel = |x: usize, y: usize| -> Option<Rgb> {
+        if let Some(index) = ORBIT.iter().position(|&p| p == (x, y)) {
+            let behind = (head + ORBIT.len() - index) % ORBIT.len();
+            if behind == 0 {
+                return Some(glint());
+            }
+            let trail = (1.0 - behind as f32 / 9.0).clamp(0.0, 1.0);
+            let base = lerp((0x0B, 0x4D, 0x28), SOLID, trail);
+            return Some(lerp(base, GLINT_GREEN, trail * trail * 0.6));
+        }
+        if (1..=4).contains(&x) && (1..=4).contains(&y) {
+            return bg.map(|bg| blend(SOLID, bg, 0.06 + 0.10 * pulse));
+        }
+        None
+    };
+    (0..RING_ROWS)
+        .map(|row| {
+            (0..RING_COLS)
+                .map(|col| crate::lantern_logo::compose(pixel(col, 2 * row), pixel(col, 2 * row + 1)))
+                .collect()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +248,49 @@ mod tests {
         let flash = at(FORM_MS + 5)[0].color;
         let settled = at(FORM_MS + FLASH_MS + 5)[0].color;
         assert!(flash.0 > settled.0, "{flash:?} vs {settled:?}");
+    }
+
+    #[test]
+    fn reveal_forms_letters_left_to_right_then_settles() {
+        let color = (0, 230, 77);
+        let text = "Shaping…";
+        let start = reveal(text, 0, color);
+        assert_eq!(start[0].0, '░', "first letter begins forming at once");
+        assert_eq!(start[3].0, ' ', "later letters have not started");
+        let mid = reveal(text, 150, color);
+        assert_eq!(mid[0].0, 'S', "first letter has locked in");
+        assert!("░▒▓".contains(mid[3].0), "fourth letter is still forming: {}", mid[3].0);
+        let done = reveal(text, reveal_duration_ms(text.chars().count()), color);
+        assert_eq!(done.iter().map(|(c, _)| *c).collect::<String>(), text);
+        assert!(done.iter().all(|(_, c)| *c == color), "flash has faded");
+    }
+
+    #[test]
+    fn reveal_keeps_spaces_so_words_do_not_jump() {
+        let shown: String = reveal("a b", 10_000, (1, 2, 3)).iter().map(|(c, _)| *c).collect();
+        assert_eq!(shown, "a b");
+    }
+
+    #[test]
+    fn mini_ring_has_fixed_size_and_a_hollow() {
+        let ring = mini_ring(Duration::from_millis(0), None);
+        assert_eq!(ring.len(), RING_ROWS);
+        assert!(ring.iter().all(|row| row.len() == RING_COLS));
+        assert_eq!(ring[1][2].ch, ' ', "hollow is empty without a known background");
+        let lit = mini_ring(Duration::from_millis(0), Some((12, 12, 16)));
+        assert!(lit[1][2].fg.is_some(), "hollow glows when the background is known");
+    }
+
+    #[test]
+    fn mini_ring_spark_orbits_with_a_trail() {
+        let at = |ms| mini_ring(Duration::from_millis(ms), None);
+        assert_ne!(at(0), at(ORBIT_STEP_MS), "the spark moves");
+        assert_eq!(at(0), at(ORBIT_STEP_MS * ORBIT.len() as u64), "one lap repeats");
+        // The head is the gold/glint pixel and the pixel behind it is dimmer.
+        let frame = at(0);
+        let head = frame[0][1].fg.expect("head pixel");
+        let behind = frame[0][4].fg.expect("tail pixel");
+        let luma = |c: Rgb| 77 * u32::from(c.0) + 150 * u32::from(c.1) + 29 * u32::from(c.2);
+        assert!(luma(head) > luma(behind), "{head:?} vs {behind:?}");
     }
 }
