@@ -755,8 +755,8 @@ where
                     queue!(
                         writer,
                         SetColors(Colors::new(
-                            cell.fg.into_crossterm(),
-                            cell.bg.into_crossterm()
+                            crate::lantern::recolor(cell.fg).into_crossterm(),
+                            crate::lantern::recolor(cell.bg).into_crossterm()
                         ))
                     )?;
                     fg = cell.fg;
@@ -772,7 +772,7 @@ where
             DrawCommand::ClearToEnd { bg: clear_bg, .. } => {
                 queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
                 modifier = Modifier::empty();
-                queue!(writer, SetBackgroundColor((*clear_bg).into_crossterm()))?;
+                queue!(writer, SetBackgroundColor(crate::lantern::recolor(*clear_bg).into_crossterm()))?;
                 bg = *clear_bg;
                 queue!(writer, Clear(crossterm::terminal::ClearType::UntilNewLine))?;
             }

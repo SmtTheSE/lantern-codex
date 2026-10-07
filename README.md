@@ -1,3 +1,5 @@
+> **Lantern Codex** is an unofficial, fan-made Green Lantern themed fork of the OpenAI Codex CLI. It is not affiliated with or endorsed by OpenAI, DC, Warner Bros. Discovery or HBO. See [LANTERN.md](LANTERN.md) for what changed, the themes and how to build it. Everything below is the upstream Codex README.
+
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />

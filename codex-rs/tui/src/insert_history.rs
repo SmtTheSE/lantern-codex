@@ -311,12 +311,12 @@ fn write_history_line<W: Write>(
             line.line
                 .style
                 .fg
-                .map(IntoCrossterm::into_crossterm)
+                .map(|color| crate::lantern::recolor(color).into_crossterm())
                 .unwrap_or(CColor::Reset),
             line.line
                 .style
                 .bg
-                .map(IntoCrossterm::into_crossterm)
+                .map(|color| crate::lantern::recolor(color).into_crossterm())
                 .unwrap_or(CColor::Reset)
         ))
     )?;
@@ -473,8 +473,8 @@ where
             queue!(
                 writer,
                 SetColors(Colors::new(
-                    next_fg.into_crossterm(),
-                    next_bg.into_crossterm()
+                    crate::lantern::recolor(next_fg).into_crossterm(),
+                    crate::lantern::recolor(next_bg).into_crossterm()
                 ))
             )?;
             fg = next_fg;

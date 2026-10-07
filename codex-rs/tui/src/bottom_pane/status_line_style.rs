@@ -98,9 +98,113 @@ pub(crate) fn status_line_from_segments<I>(
 where
     I: IntoIterator<Item = (StatusLineItem, String)>,
 {
+    if crate::lantern::enabled() {
+        return lantern_status_line(segments);
+    }
     status_line_from_segments_with_resolver(segments, use_theme_colors, thread_id, |accent| {
         foreground_style_for_scopes(accent.scopes())
     })
+}
+
+const LANTERN_BAR_CELLS: usize = 8;
+const LANTERN_SEPARATOR: &str = " │ ";
+
+/// First `NN%` in `text`, as a number.
+fn percent_in(text: &str) -> Option<u8> {
+    let end = text.find('%')?;
+    let digits: String = text[..end]
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    digits.parse::<u16>().ok().map(|p| p.min(100) as u8)
+}
+
+/// Bar label for a limit or context item: `"5h limit 80% left"` becomes `"5h"`.
+fn lantern_bar_label(item: StatusLineItem, text: &str) -> String {
+    match item {
+        StatusLineItem::ContextRemaining | StatusLineItem::ContextUsed => "ctx".to_string(),
+        _ => {
+            let before_percent = text.find('%').map_or(text, |end| &text[..end]);
+            before_percent
+                .trim_end_matches(|c: char| c.is_ascii_digit())
+                .trim()
+                .trim_end_matches("limit")
+                .trim()
+                .to_string()
+        }
+    }
+}
+
+/// Green status line modeled on the reference terminal: a bracketed model, then
+/// ` │ `-separated items, with limits and context drawn as bars. Low remaining
+/// capacity turns the bar yellow.
+fn lantern_status_line<I>(segments: I) -> Option<Line<'static>>
+where
+    I: IntoIterator<Item = (StatusLineItem, String)>,
+{
+    let rgb = crate::terminal_palette::rgb_color;
+    let green = Style::default().fg(rgb(crate::lantern::RING_GREEN));
+    let heartland = crate::lantern::heartland();
+    let pick = |heartland_color, corps_color| {
+        Style::default().fg(rgb(if heartland { heartland_color } else { corps_color }))
+    };
+    // Rules and empty bar cells recede; labels and paths use warm earth tones.
+    let dim_green = pick(crate::lantern::UMBER, crate::lantern::DIM_GREEN);
+    let label_style = pick(crate::lantern::DUST, crate::lantern::DIM_GREEN);
+    let path_style = pick(crate::lantern::STRAW, crate::lantern::DIM_GREEN);
+    let text_style = pick(crate::lantern::BONE, crate::lantern::RING_GREEN);
+    let yellow = Style::default().fg(rgb(crate::lantern::YELLOW_IMPURITY));
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (item, text) in segments {
+        if !spans.is_empty() {
+            spans.push(Span::styled(LANTERN_SEPARATOR, dim_green));
+        }
+        match item {
+            StatusLineItem::ModelName
+            | StatusLineItem::ModelWithReasoning
+            | StatusLineItem::Reasoning => {
+                spans.push(Span::styled(format!("[{text}]"), green.bold()));
+            }
+            StatusLineItem::FiveHourLimit
+            | StatusLineItem::WeeklyLimit
+            | StatusLineItem::ContextRemaining
+            | StatusLineItem::ContextUsed => {
+                let Some(pct) = percent_in(&text) else {
+                    spans.push(Span::styled(text, green));
+                    continue;
+                };
+                // The bar and the number always agree: both show `pct`, which is
+                // "used" for context-used and "left" for the other items. A low
+                // reading (nearly full, or nearly out) turns the bar yellow.
+                let low = if matches!(item, StatusLineItem::ContextUsed) {
+                    pct >= 75
+                } else {
+                    pct < 25
+                };
+                let bar_style = if low { yellow } else { green };
+                let filled =
+                    ((usize::from(pct) * LANTERN_BAR_CELLS + 50) / 100).min(LANTERN_BAR_CELLS);
+                let label = lantern_bar_label(item, &text);
+                if !label.is_empty() {
+                    spans.push(Span::styled(format!("{label} "), label_style));
+                }
+                spans.push(Span::styled("━".repeat(filled), bar_style));
+                spans.push(Span::styled("─".repeat(LANTERN_BAR_CELLS - filled), dim_green));
+                let pct_style = if low || !heartland { bar_style } else { text_style };
+                spans.push(Span::styled(format!(" {pct}%"), pct_style));
+            }
+            StatusLineItem::CurrentDir | StatusLineItem::ProjectRoot => {
+                spans.push(Span::styled(text, path_style));
+            }
+            _ => spans.push(Span::styled(text, text_style)),
+        }
+    }
+    (!spans.is_empty()).then(|| Line::from(spans))
 }
 
 fn status_line_from_segments_with_resolver<I, F>(
@@ -388,5 +492,60 @@ mod tests {
             line.render(area, &mut buffer);
             insta::assert_snapshot!(format!("{buffer:?}"));
         });
+    }
+}
+
+#[cfg(test)]
+mod lantern_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn percent_is_read_from_limit_text() {
+        assert_eq!(percent_in("5h limit 80% left"), Some(80));
+        assert_eq!(percent_in("Context 7% used"), Some(7));
+        assert_eq!(percent_in("no number"), None);
+    }
+
+    #[test]
+    fn bar_labels_drop_the_limit_word_and_digits() {
+        assert_eq!(lantern_bar_label(StatusLineItem::FiveHourLimit, "5h limit 80% left"), "5h");
+        assert_eq!(lantern_bar_label(StatusLineItem::WeeklyLimit, "weekly limit 93% left"), "weekly");
+        assert_eq!(lantern_bar_label(StatusLineItem::ContextUsed, "Context 12% used"), "ctx");
+    }
+
+    #[test]
+    fn renders_bracketed_model_bars_and_separators() {
+        let line = lantern_status_line([
+            (StatusLineItem::ModelWithReasoning, "gpt-6.1 low".to_string()),
+            (StatusLineItem::CurrentDir, "~/proj".to_string()),
+            (StatusLineItem::FiveHourLimit, "5h limit 50% left".to_string()),
+            (StatusLineItem::ContextUsed, "Context 25% used".to_string()),
+        ])
+        .expect("line");
+        assert_eq!(
+            text(&line),
+            "[gpt-6.1 low] │ ~/proj │ 5h ━━━━──── 50% │ ctx ━━────── 25%"
+        );
+    }
+
+    #[test]
+    fn low_remaining_turns_the_bar_yellow() {
+        let line = lantern_status_line([(
+            StatusLineItem::FiveHourLimit,
+            "5h limit 10% left".to_string(),
+        )])
+        .expect("line");
+        let filled = line
+            .spans
+            .iter()
+            .find(|s| s.content.starts_with('━'))
+            .expect("filled bar span");
+        let expected = crate::terminal_palette::rgb_color(crate::lantern::YELLOW_IMPURITY);
+        assert_eq!(filled.style.fg, Some(expected));
     }
 }

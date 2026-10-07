@@ -39,6 +39,7 @@ pub(crate) fn summary_shimmer(
     else {
         return vec![Span::styled(text.to_owned(), Style::default().dim())];
     };
+    let fg = crate::lantern::shimmer_fg(fg);
     let width = text.width() as f64;
     let half_width = (width * 0.1).max(/*other*/ 3.0);
     let sweep =

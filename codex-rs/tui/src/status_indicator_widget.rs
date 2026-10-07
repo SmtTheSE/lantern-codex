@@ -56,6 +56,8 @@ pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
     header_started_at: Instant,
+    /// Offset into the lantern phrase pack, fixed for the life of this row.
+    phrase_base: usize,
     details: Option<String>,
     details_max_lines: usize,
     /// Optional suffix rendered after the elapsed/interrupt segment.
@@ -97,6 +99,7 @@ impl StatusIndicatorWidget {
     ) -> Self {
         Self {
             header: String::from("Working"),
+            phrase_base: crate::lantern::next_base(),
             header_started_at: Instant::now(),
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
@@ -233,7 +236,17 @@ impl StatusIndicator<'_> {
             MotionMode::from_animations_enabled(row.animations_enabled && row.effects.shimmer);
 
         let mut spans = Vec::with_capacity(5);
-        if let Some(indicator) = activity_indicator(
+        if crate::lantern::show_construct() && progress == MotionMode::Animated {
+            let running = now.saturating_duration_since(self.timer.last_resume_at);
+            for cell in crate::lantern_construct::badge(running) {
+                spans.push(Span::styled(
+                    cell.glyph.to_string(),
+                    ratatui::style::Style::default()
+                        .fg(crate::terminal_palette::rgb_color(cell.color)),
+                ));
+            }
+            spans.push(" ".into());
+        } else if let Some(indicator) = activity_indicator(
             Some(self.timer.last_resume_at),
             progress,
             ReducedMotionIndicator::Hidden,
@@ -241,8 +254,18 @@ impl StatusIndicator<'_> {
             spans.push(indicator);
             spans.push(" ".into());
         }
+        let lantern = crate::lantern::enabled();
+        let elapsed_secs = elapsed_duration.as_secs();
+        let shown_header = if lantern {
+            format!(
+                "{}…",
+                crate::lantern::phrase(row.phrase_base, elapsed_secs, &row.header)
+            )
+        } else {
+            row.header.clone()
+        };
         spans.extend(summary_shimmer(
-            &row.header,
+            &shown_header,
             now.saturating_duration_since(row.header_started_at),
             shimmer,
         ));
@@ -257,6 +280,11 @@ impl StatusIndicator<'_> {
             spans.push(" to interrupt)".dim());
         } else {
             spans.push(format!("({pretty_elapsed})").dim());
+        }
+        if lantern && row.header != "Working" {
+            // Keep the model's own status text visible beside the themed phrase.
+            spans.push(" · ".dim());
+            spans.push(row.header.clone().dim());
         }
         if let Some(message) = &row.inline_message {
             // Keep optional context after elapsed/interrupt text so that core
@@ -285,6 +313,23 @@ impl StatusIndicator<'_> {
             usize::from(width),
         ));
         lines.extend(hook_overflow);
+        if lantern && row.details.is_none() {
+            let (rule, text) = if crate::lantern::heartland() {
+                (crate::lantern::UMBER, crate::lantern::DUST)
+            } else {
+                (crate::lantern::RING_GREEN, crate::lantern::RING_GREEN)
+            };
+            let rgb = crate::terminal_palette::rgb_color;
+            lines.push(truncate_line_with_ellipsis_if_overflow(
+                Line::from(vec![
+                    DETAILS_PREFIX.fg(rgb(rule)),
+                    crate::lantern::oath_line(row.phrase_base, elapsed_secs)
+                        .fg(rgb(text))
+                        .italic(),
+                ]),
+                usize::from(width),
+            ));
+        }
         lines.extend(row.wrapped_details_lines(width));
         lines
     }

@@ -44,7 +44,7 @@ pub(crate) fn with_border_with_inner_width(
 pub(crate) fn codex_title(version: &str) -> Vec<Span<'static>> {
     vec![
         ">_ ".fg(accent_color()),
-        "OpenAI Codex".bold(),
+        crate::lantern::title().bold(),
         format!(" (v{version})").dim(),
     ]
 }
@@ -327,6 +327,114 @@ impl SessionHeaderHistoryCell {
         formatted
     }
 
+    /// Themed banner: the ring on the left; directory, wordmark with sector
+    /// readout, glow rule, tagline, oath and model on the right.
+    fn banner_lines(
+        &self,
+        width: usize,
+        image: Vec<Vec<crate::lantern_logo::Cell>>,
+    ) -> Vec<Line<'static>> {
+        use ratatui::style::Style;
+
+        let rgb = crate::terminal_palette::rgb_color;
+        let heartland = crate::lantern::heartland();
+        let green = rgb(crate::lantern::RING_GREEN);
+        let bone = rgb(crate::lantern::BONE);
+        let straw = rgb(crate::lantern::STRAW);
+        let dust = rgb(crate::lantern::DUST);
+        let image_width = image.first().map_or(0, Vec::len);
+        let text_width = width.saturating_sub(image_width + 5);
+
+        // Wordmark: letter-spaced capitals like the series' title card, then
+        // the sector readout from the reference terminal.
+        let mut wordmark: Vec<Span<'static>> = if heartland {
+            let spaced: String = "LANTERN  CODEX"
+                .chars()
+                .flat_map(|c| [c, ' '])
+                .collect::<String>()
+                .trim_end()
+                .to_string();
+            vec![Span::styled(spaced, Style::default().fg(bone).bold())]
+        } else {
+            let name = crate::lantern::title().to_uppercase();
+            let letters = name.chars().count().max(2) - 1;
+            name.chars()
+                .enumerate()
+                .map(|(i, ch)| {
+                    let t = i as f32 / letters as f32;
+                    let color = crate::color::blend((0xB8, 0xFF, 0xD0), (0x00, 0xC8, 0x53), t);
+                    Span::styled(ch.to_string(), Style::default().fg(rgb(color)).bold())
+                })
+                .collect()
+        };
+        wordmark.push(Span::styled(" · ", Style::default().fg(dust)));
+        wordmark.push(Span::styled("Sector 2814", Style::default().fg(green)));
+        wordmark.push(format!("  v{}", self.version).dim());
+
+        let oath_style = |i: usize| {
+            let color = if heartland && i + 1 < crate::lantern::OATH.len() { dust } else { green };
+            Style::default().fg(color).italic()
+        };
+        let model_color = if heartland { straw } else { green };
+        let mut model = vec![Span::styled(self.model.clone(), Style::default().fg(model_color))];
+        if let Some(effort) = self.reasoning_label() {
+            model.push(format!(" · {effort}").dim());
+        }
+        if self.yolo_mode {
+            model.push("  YOLO mode".magenta().bold());
+        }
+
+        // Emerald glow rule under the wordmark, fading outward.
+        let rule_len = text_width.min(30);
+        let rule: Vec<Span<'static>> = (0..rule_len)
+            .map(|i| {
+                let t = i as f32 / rule_len.max(1) as f32;
+                let color = crate::color::blend(
+                    crate::lantern::RING_GREEN,
+                    crate::lantern::UMBER,
+                    1.0 - t,
+                );
+                Span::styled("━", Style::default().fg(rgb(color)))
+            })
+            .collect();
+
+        let mut beside: Vec<Vec<Span<'static>>> = vec![Vec::new(); image.len()];
+        // Text is centered against the taller ring.
+        let top = image.len().saturating_sub(11) / 2;
+        beside[top + 1] = vec![self.format_directory(Some(text_width)).dim()];
+        beside[top + 3] = wordmark;
+        beside[top + 4] = rule;
+        beside[top + 5] = vec![Span::styled(
+            "Power rings. Small town. Open source.",
+            Style::default().fg(straw).italic(),
+        )];
+        for (i, line) in crate::lantern::OATH.iter().enumerate() {
+            beside[top + 6 + i] = vec![Span::styled(*line, oath_style(i))];
+        }
+        beside[top + 10] = model;
+
+        let mut lines = vec![Line::default()];
+        for (cells, text) in image.into_iter().zip(beside) {
+            let mut spans: Vec<Span<'static>> = vec![Span::from("  ")];
+            for crate::lantern_logo::Cell { ch, fg, bg } in cells {
+                let mut style = Style::default();
+                if let Some(fg) = fg {
+                    style = style.fg(rgb(fg));
+                }
+                if let Some(bg) = bg {
+                    style = style.bg(rgb(bg));
+                }
+                spans.push(Span::styled(ch.to_string(), style));
+            }
+            if !text.is_empty() {
+                spans.push(Span::from("   "));
+                spans.extend(text);
+            }
+            lines.push(truncate_line_with_ellipsis_if_overflow(Line::from(spans), width));
+        }
+        lines
+    }
+
     fn reasoning_label(&self) -> Option<&str> {
         self.reasoning_effort
             .as_ref()
@@ -337,6 +445,10 @@ impl SessionHeaderHistoryCell {
 impl HistoryCell for SessionHeaderHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let width = usize::from(width);
+        if crate::lantern::show_logo(width) {
+            let image = crate::lantern_logo::render(crate::terminal_palette::default_bg());
+            return self.banner_lines(width, image);
+        }
         let mut title = vec!["  ".into()];
         title.extend(codex_title(self.version));
         let mut lines = vec![
@@ -362,7 +474,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let mut lines = vec![
-            Line::from(format!("OpenAI Codex (v{})", self.version)),
+            Line::from(format!("{} (v{})", crate::lantern::title(), self.version)),
             Line::from(format!(
                 "model: {}{}",
                 self.model,

@@ -102,6 +102,9 @@ pub(crate) use codex_app_server_client::legacy_core;
 pub(crate) use worktree_startup::ManagedTuiWorktree;
 
 mod additional_dirs;
+mod lantern;
+mod lantern_construct;
+mod lantern_logo;
 mod analytics;
 mod app;
 mod app_backtrack;

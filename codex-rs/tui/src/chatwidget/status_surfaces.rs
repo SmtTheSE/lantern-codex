@@ -463,10 +463,12 @@ impl ChatWidget {
             .status_line
             .clone()
             .unwrap_or_else(|| {
-                DEFAULT_STATUS_LINE_ITEMS
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect()
+                let defaults: &[&str] = if crate::lantern::enabled() {
+                    &crate::lantern::DEFAULT_STATUS_ITEMS
+                } else {
+                    &DEFAULT_STATUS_LINE_ITEMS
+                };
+                defaults.iter().map(ToString::to_string).collect()
             })
     }
 
